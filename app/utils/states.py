@@ -6,3 +6,7 @@ class ComplaintStates(StatesGroup):
     choosing_target = State()
     waiting_phone = State()
     writing_text = State()
+
+
+class AdminReplyStates(StatesGroup):
+    writing_reply = State()

@@ -91,3 +91,12 @@ def get_all_complaints():
     rows = cur.fetchall()
     conn.close()
     return rows
+
+
+def get_complaint_by_id(complaint_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM complaints WHERE id = ?', (complaint_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row

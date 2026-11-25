@@ -1,4 +1,5 @@
 from datetime import datetime
+from html import escape
 import re
 from aiogram import F, Router
 from aiogram.filters import CommandStart
@@ -6,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from aiogram import Router, F
 from config import ADMIN_IDS, BRANCHES, COMPLAINT_TARGETS
+from app.keyboards.inline import complaint_reply_inline
 from app.keyboards.reply import (
     admin_main_menu,
     branches_keyboard,
@@ -150,17 +152,21 @@ async def save_complaint(message: Message, state: FSMContext, bot):
         f"🆔 ID: {complaint_id}\n"
         f"🏢 Filial: {branch}\n"
         f"👤 Kim ustidan: {target_role}\n"
-        f"🙍 Ism: {full_name}\n"
+        f"🙍 Ism: {escape(full_name)}\n"
         f"📞 Telefon: {phone}\n"
         f"🔗 Username: @{username if username else '-'}\n"
         f"🆔 Telegram ID: {message.from_user.id}\n"
         f"🕒 Sana: {created_at}\n\n"
-        f"📝 Shikoyat:\n{text}"
+        f"📝 Shikoyat:\n{escape(text)}"
     )
 
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, admin_text)
+            await bot.send_message(
+                admin_id,
+                admin_text,
+                reply_markup=complaint_reply_inline(complaint_id),
+            )
         except Exception:
             pass
 
