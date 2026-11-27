@@ -1,12 +1,14 @@
 from html import escape
+import logging
+import re
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import CallbackQuery, ForceReply, FSInputFile, Message
 
 from config import ADMIN_IDS
 from app.keyboards.inline import admin_branches_inline, complaint_reply_inline
-from app.keyboards.reply import admin_main_menu, cancel_keyboard
+from app.keyboards.reply import admin_main_menu
 from app.services.database import get_complaint_by_id, get_complaints_by_branch
 from app.services.report import build_excel_report
 from app.utils.states import AdminReplyStates
@@ -68,6 +70,24 @@ async def complaint_counts(message: Message):
     )
 
 
+REPLY_PROMPT_PREFIX = "✍️ Javob yozish | ID:"
+CANCEL_TEXTS = ["⬅️ Bekor qilish", "Bekor qilish", "❌ Bekor qilish"]
+MENU_TEXTS = ["📝 Talab yoki Taklif qilish", "📂 Shikoyatlar", "📊 Shikoyatlar soni"]
+
+
+def _reply_target_id(message: Message) -> int | None:
+    """Admin javob yozish xabariga (Reply) javob bergan bo'lsa, shikoyat ID sini qaytaradi."""
+    replied = message.reply_to_message
+    if not replied or not replied.text or not replied.from_user or not replied.from_user.is_bot:
+        return None
+    if replied.text.startswith(REPLY_PROMPT_PREFIX):
+        match = re.search(r"ID:\s*(\d+)", replied.text)
+    else:
+        # Admin shikoyat kartasining o'ziga Reply qilib yozsa ham ishlaydi
+        match = re.search(r"🆔 ID:\s*(\d+)", replied.text)
+    return int(match.group(1)) if match else None
+
+
 @router.callback_query(F.data.startswith("reply_complaint:"))
 async def reply_complaint_start(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -83,16 +103,29 @@ async def reply_complaint_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminReplyStates.writing_reply)
     await state.update_data(reply_complaint_id=complaint_id)
     await callback.message.answer(
-        f"✍️ ID: {complaint_id} shikoyatga javobingizni yozing.\n"
-        f"Javob {escape(complaint['full_name'] or 'foydalanuvchi')} ga yuboriladi.",
-        reply_markup=cancel_keyboard(),
+        f"{REPLY_PROMPT_PREFIX} {complaint_id}\n\n"
+        f"Javobingizni shu xabarga yozing. "
+        f"Javob {escape(complaint['full_name'] or 'foydalanuvchi')} ga yuboriladi.\n"
+        f"Bekor qilish uchun: ⬅️ Bekor qilish",
+        reply_markup=ForceReply(input_field_placeholder="Javobingizni yozing..."),
     )
     await callback.answer()
 
 
-@router.message(AdminReplyStates.writing_reply)
+async def _is_reply_to_admin_prompt(message: Message, state: FSMContext) -> bool:
+    if message.from_user.id not in ADMIN_IDS:
+        return False
+    text = message.text or ""
+    if text.startswith("/") or text in MENU_TEXTS:
+        return False
+    if _reply_target_id(message) is not None:
+        return True
+    return await state.get_state() == AdminReplyStates.writing_reply.state
+
+
+@router.message(_is_reply_to_admin_prompt)
 async def reply_complaint_send(message: Message, state: FSMContext, bot: Bot):
-    if message.text in ["⬅️ Bekor qilish", "Bekor qilish", "❌ Bekor qilish"]:
+    if message.text in CANCEL_TEXTS:
         await state.clear()
         await message.answer("Javob yuborish bekor qilindi.", reply_markup=admin_main_menu())
         return
@@ -102,8 +135,12 @@ async def reply_complaint_send(message: Message, state: FSMContext, bot: Bot):
         await message.answer("Iltimos, javobni matn ko'rinishida yozing.")
         return
 
-    data = await state.get_data()
-    complaint = get_complaint_by_id(data.get("reply_complaint_id", 0))
+    complaint_id = _reply_target_id(message)
+    if complaint_id is None:
+        data = await state.get_data()
+        complaint_id = data.get("reply_complaint_id", 0)
+
+    complaint = get_complaint_by_id(complaint_id)
     if not complaint:
         await state.clear()
         await message.answer("Shikoyat topilmadi.", reply_markup=admin_main_menu())
@@ -117,10 +154,12 @@ async def reply_complaint_send(message: Message, state: FSMContext, bot: Bot):
 
     try:
         await bot.send_message(complaint["user_id"], user_text)
-    except Exception:
+    except Exception as error:
+        logging.exception("Javobni foydalanuvchiga yuborib bo'lmadi (ID: %s)", complaint["id"])
         await state.clear()
         await message.answer(
-            "❌ Javobni yuborib bo'lmadi. Foydalanuvchi botni bloklagan bo'lishi mumkin.",
+            f"❌ Javobni yuborib bo'lmadi. Foydalanuvchi botni bloklagan bo'lishi mumkin.\n"
+            f"Sabab: {escape(str(error))}",
             reply_markup=admin_main_menu(),
         )
         return
